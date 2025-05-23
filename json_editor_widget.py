@@ -1,5 +1,6 @@
 import sys
 import json
+import os # Added for os.path.basename
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -10,15 +11,56 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QInputDialog, 
     QDialog, 
-    QVBoxLayout as QVBoxLayoutDialog, # Alias to avoid conflict if used elsewhere, though QVBoxLayout is already imported
+    QVBoxLayout, # Ensuring QVBoxLayout is directly available
     QFormLayout, 
     QLineEdit, 
     QDialogButtonBox,
     QLabel,
-    QComboBox
+    QComboBox,
+    QHBoxLayout # Added for filter layout
 )
 from PySide6.QtGui import QStandardItemModel, QStandardItem
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSortFilterProxyModel # Added QSortFilterProxyModel
+
+
+class KeyFilterProxyModel(QSortFilterProxyModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.filter_text = ""
+
+    def set_filter_text(self, text):
+        self.filter_text = text.lower()
+        self.invalidateFilter() # Trigger a re-filter
+
+    def filterAcceptsRow(self, source_row, source_parent_index):
+        if not self.filter_text: # No filter, accept all
+            return True
+
+        source_model = self.sourceModel()
+        
+        # Get the QStandardItem for the key in the current row
+        key_item_index = source_model.index(source_row, 0, source_parent_index)
+        if not key_item_index.isValid():
+            return False # Should not happen with valid model
+
+        key_item = source_model.itemFromIndex(key_item_index)
+        if not key_item:
+             return False # Should not happen
+
+        # Check if the current item's key matches
+        current_key_text = key_item.text().lower()
+        key_matches = self.filter_text in current_key_text
+        
+        if key_matches:
+            return True # Current item's key matches, show it and its children
+
+        # If key doesn't match, check if any children match (so parent is visible)
+        if source_model.hasChildren(key_item_index):
+            for i in range(source_model.rowCount(key_item_index)):
+                if self.filterAcceptsRow(i, key_item_index): # Recursive call for children
+                    return True
+        
+        return False # Neither current key nor any children keys match
 
 
 class AddItemDialog(QDialog):
@@ -91,37 +133,66 @@ class JsonEditorWidget(QWidget):
         self.model = QStandardItemModel()
         self.model.setHorizontalHeaderLabels(['Key', 'Value'])
 
+        self.proxy_model = KeyFilterProxyModel(self)
+        self.proxy_model.setSourceModel(self.model)
+
         self.tree_view = QTreeView()
-        self.tree_view.setModel(self.model)
+        self.tree_view.setModel(self.proxy_model) # Use proxy model
         self.tree_view.setAlternatingRowColors(True)
         self.tree_view.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows) # Corrected enum
         self.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree_view.setEditTriggers(QTreeView.EditTrigger.DoubleClicked | QTreeView.EditTrigger.EditKeyPressed) # Corrected enum
         self.model.itemChanged.connect(self.on_item_changed)
         self._is_programmatic_change = False
+        self.current_file_path = None # Added for tracking current file
 
         # Layout
-        main_layout = QVBoxLayout(self) # Changed variable name for clarity
+        main_layout = QVBoxLayout(self)
+
+        # Filter input
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("Filter by key...")
+        self.filter_input.textChanged.connect(self.proxy_model.set_filter_text)
+        
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter:"))
+        filter_layout.addWidget(self.filter_input)
+        main_layout.addLayout(filter_layout)
+
         main_layout.addWidget(self.tree_view)
 
         # Buttons
         self.load_button = QPushButton("Load JSON")
-        self.save_button = QPushButton("Save JSON")
+        self.save_button = QPushButton("Save") # New name
+        self.save_as_button = QPushButton("Save As...")
         self.add_item_button = QPushButton("Add Item")
         self.remove_item_button = QPushButton("Remove Item")
+        self.consistency_check_button = QPushButton("Check Consistency")
+        self.expand_all_button = QPushButton("Expand All") # New button
+        self.collapse_all_button = QPushButton("Collapse All") # New button
 
         button_layout = QHBoxLayout() 
         button_layout.addWidget(self.load_button)
         button_layout.addWidget(self.save_button)
+        button_layout.addWidget(self.save_as_button) 
         button_layout.addWidget(self.add_item_button)
         button_layout.addWidget(self.remove_item_button)
+        button_layout.addWidget(self.consistency_check_button)
+        button_layout.addWidget(self.expand_all_button) # Added to layout
+        button_layout.addWidget(self.collapse_all_button) # Added to layout
         main_layout.addLayout(button_layout)
 
         # Connect signals for buttons
         self.load_button.clicked.connect(self.handle_load_json)
-        self.save_button.clicked.connect(self.handle_save_json)
+        self.save_button.clicked.connect(self.handle_save) 
+        self.save_as_button.clicked.connect(self.handle_save_as)
         self.add_item_button.clicked.connect(self.handle_add_item)
         self.remove_item_button.clicked.connect(self.handle_remove_item)
+        self.consistency_check_button.clicked.connect(self.handle_consistency_check)
+        self.expand_all_button.clicked.connect(self.handle_expand_all) # New connection
+        self.collapse_all_button.clicked.connect(self.handle_collapse_all) # New connection
+        
+        self.update_window_title() # Initial call
 
         # self.setLayout(main_layout) # QVBoxLayout was already passed self
 
@@ -402,6 +473,8 @@ class JsonEditorWidget(QWidget):
                 # We already have a method that takes a string
                 if self.load_json_from_string(json_string): # load_json_from_string handles its own error messages for parsing
                     QMessageBox.information(self, "Success", "JSON file loaded successfully.")
+                    self.current_file_path = file_path # Add this line
+                    self.update_window_title() # Add this call
                 # else: # load_json_from_string returned False, indicating an error it already reported.
             except FileNotFoundError:
                 QMessageBox.critical(self, "Error", f"File not found: {file_path}")
@@ -411,11 +484,25 @@ class JsonEditorWidget(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"An unexpected error occurred: {e}")
 
-    def handle_save_json(self):
+    def handle_save(self): # Renamed from handle_save_json
+        if self.current_file_path:
+            try:
+                data_dict = self.to_dict()
+                json_string = json.dumps(data_dict, indent=4, ensure_ascii=False)
+                with open(self.current_file_path, 'w', encoding='utf-8') as f:
+                    f.write(json_string)
+                QMessageBox.information(self, "Success", f"JSON file saved to {self.current_file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save JSON file: {e}")
+        else:
+            # If no current path, behave like "Save As"
+            self.handle_save_as()
+
+    def handle_save_as(self):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save JSON File",
-            "",  # Start directory
+            "Save JSON File As...",
+            self.current_file_path if self.current_file_path else "",  # Start directory or last path
             "JSON Files (*.json);;All Files (*)"
         )
         if file_path:
@@ -424,68 +511,89 @@ class JsonEditorWidget(QWidget):
                 json_string = json.dumps(data_dict, indent=4, ensure_ascii=False)
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(json_string)
-                QMessageBox.information(self, "Success", "JSON file saved successfully.")
+                self.current_file_path = file_path # Update current path
+                self.update_window_title() # Update window title
+                QMessageBox.information(self, "Success", f"JSON file saved to {file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save JSON file: {e}")
+                
+    def update_window_title(self):
+        window = self.window() # Gets the top-level window containing this widget
+        if window: # Check if widget is part of a window
+            # Attempt to find a base title. This might need adjustment if main.py changes its title logic.
+            # For now, assume a generic base or retrieve if possible.
+            # A more robust way might be to pass the base title or a callback from main.py.
+            base_title = "JSON Editor" 
+            # Check if the current window title already contains "JSON Editor" to avoid duplication
+            # This is a simple check; more sophisticated state management might be needed for complex title scenarios
+            current_window_title = window.windowTitle()
+            if "JSON Editor" in current_window_title and "-" in current_window_title:
+                # Try to extract the original base title part if it was set like "Base - File"
+                base_title = current_window_title.split(" - ")[0]
+
+
+            if self.current_file_path:
+                file_name = os.path.basename(self.current_file_path)
+                window.setWindowTitle(f"{base_title} - {file_name}")
+            else:
+                window.setWindowTitle(f"{base_title} - New File")
 
     def handle_add_item(self):
-        current_index = self.tree_view.currentIndex()
+        proxy_current_index = self.tree_view.currentIndex()
+        # Map proxy index to source index for model operations
+        current_index = self.proxy_model.mapToSource(proxy_current_index) if proxy_current_index.isValid() else proxy_current_index
+
         parent_item = None
         parent_type = "dict" # Default to dict if adding to root or no selection
 
-        if current_index.isValid():
-            selected_item = self.model.itemFromIndex(current_index)
-            # If selected item is a key of a container, its children are the container's items.
-            # If selected item is a value of a container, its parent is the key.
-            # We want to add to the container represented by selected_item (if it's a key)
-            # or to the container selected_item belongs to.
-
-            # Determine the actual item that will be the parent for the new child.
-            # And determine if it's a list or a dictionary.
-            potential_parent = selected_item
-            if selected_item.column() == 1: # Selected a value cell
-                # Try to get the key item associated with this value cell's row
-                parent_row_key_item = selected_item.parent().child(selected_item.row(), 0) if selected_item.parent() else None
-                if parent_row_key_item and (parent_row_key_item.hasChildren() or self._get_stored_type_info(parent_row_key_item) in ["list", "dict"]):
-                     potential_parent = parent_row_key_item # The key item is the container
-                elif selected_item.parent(): # Selected a simple value, its parent (the key item's parent) is the container
-                    potential_parent = selected_item.parent()
-                # else: selected_item has no parent, should not happen for a value cell if model is structured.
-
-            stored_type = self._get_stored_type_info(potential_parent)
-            if potential_parent.hasChildren() or stored_type in ["list", "dict"]: # It's a container or marked as one
-                parent_item = potential_parent
-                parent_type = stored_type if stored_type in ["list", "dict"] else "dict" # Fallback
-            elif potential_parent.parent(): # It's a child item, so add to its parent container
-                parent_item = potential_parent.parent()
-                stored_type_on_parent = self._get_stored_type_info(parent_item)
-                parent_type = stored_type_on_parent if stored_type_on_parent in ["list", "dict"] else "dict"
-            else: # No clear parent container from selection, add to root
+        if current_index.isValid(): # Use the mapped source_index
+            # Get item from the source model
+            selected_item = self.model.itemFromIndex(current_index) 
+            if not selected_item: # Should not happen if index is valid and mapped
                 parent_item = self.model.invisibleRootItem()
-                root_type = self._get_stored_type_info(parent_item)
-                parent_type = root_type if root_type in ["list", "dict"] else "dict"
-        else: # No selection, add to root
+                parent_type = self._get_stored_type_info(parent_item) or "dict"
+            else:
+                potential_parent = selected_item
+                if selected_item.column() == 1: # Selected a value cell
+                    parent_row_key_item = selected_item.parent().child(selected_item.row(), 0) if selected_item.parent() else None
+                    if parent_row_key_item and (parent_row_key_item.hasChildren() or self._get_stored_type_info(parent_row_key_item) in ["list", "dict"]):
+                         potential_parent = parent_row_key_item
+                    elif selected_item.parent():
+                        potential_parent = selected_item.parent()
+
+                stored_type = self._get_stored_type_info(potential_parent)
+                if potential_parent.hasChildren() or stored_type in ["list", "dict"]:
+                    parent_item = potential_parent
+                    parent_type = stored_type if stored_type in ["list", "dict"] else "dict"
+                elif potential_parent.parent():
+                    parent_item = potential_parent.parent()
+                    stored_type_on_parent = self._get_stored_type_info(parent_item)
+                    parent_type = stored_type_on_parent if stored_type_on_parent in ["list", "dict"] else "dict"
+                else: 
+                    parent_item = self.model.invisibleRootItem()
+                    root_type = self._get_stored_type_info(parent_item)
+                    parent_type = root_type if root_type in ["list", "dict"] else "dict"
+        else: # No selection or invalid mapped index, add to root
             parent_item = self.model.invisibleRootItem()
             root_type = self._get_stored_type_info(parent_item)
             parent_type = root_type if root_type in ["list", "dict"] else "dict"
-            if not root_type and parent_item.rowCount() == 0: # If root is empty and untyped, assume dict
+            if not root_type and parent_item.rowCount() == 0:
                  self._store_type_info(parent_item, "dict")
+                 parent_type = "dict"
 
 
         dialog = AddItemDialog(parent_type, self)
-        if dialog.exec() == QDialog.Accepted: # Use QDialog.DialogCode.Accepted for PySide6
+        if dialog.exec() == QDialog.Accepted: 
             try:
                 key, value = dialog.get_data()
-                
                 key_text = key
                 if parent_type == "list":
-                    key_text = str(parent_item.rowCount()) # Index for list
+                    key_text = str(parent_item.rowCount()) 
                 
-                if parent_type == "dict" and not key_text: # Ensure key_text is not None or empty
+                if parent_type == "dict" and not key_text:
                     QMessageBox.warning(self, "Add Item", "Key cannot be empty for an object.")
                     return
 
-                # Prevent duplicate keys in dict
                 if parent_type == "dict":
                     for i in range(parent_item.rowCount()):
                         if parent_item.child(i, 0) and parent_item.child(i, 0).text() == key_text:
@@ -494,27 +602,34 @@ class JsonEditorWidget(QWidget):
 
                 key_item = QStandardItem(key_text)
                 if parent_type == "list":
-                    key_item.setEditable(False) # List indices are not editable
+                    key_item.setEditable(False) 
                 else:
-                    key_item.setEditable(True) # Dict keys are editable
-                    key_item.setData(key_text, Qt.UserRole + 2) # Store original key for editing tracking
+                    key_item.setEditable(True) 
+                    key_item.setData(key_text, Qt.UserRole + 2) 
 
-                value_item = None # Must define value_item
+                value_item = None 
                 if isinstance(value, (dict, list)):
-                    value_item = QStandardItem(f"({type(value).__name__})") # Display type
+                    value_item = QStandardItem(f"({type(value).__name__})") 
                     value_item.setEditable(False)
                     self._store_type_info(key_item, "dict" if isinstance(value, dict) else "list")
-                    self._populate_tree_recursive(value, key_item) # Populate children
+                    self._populate_tree_recursive(value, key_item) 
                 else:
                     value_item = QStandardItem(self._format_value_for_display(value))
                     value_item.setEditable(True)
                 
                 parent_item.appendRow([key_item, value_item])
-                if parent_item != self.model.invisibleRootItem(): # Don't try to expand invisible root
-                    self.tree_view.expand(parent_item.index())
-                else: # If adding to root, expand the new item if it's a container
-                    self.tree_view.expand(key_item.index())
 
+                # Expansion logic: use mapFromSource for the view
+                source_parent_idx_for_view = parent_item.index()
+                if parent_item != self.model.invisibleRootItem():
+                    proxy_parent_idx_for_view = self.proxy_model.mapFromSource(source_parent_idx_for_view)
+                    if proxy_parent_idx_for_view.isValid():
+                        self.tree_view.expand(proxy_parent_idx_for_view)
+                else: # If adding to root, expand the new item itself (key_item)
+                    source_key_item_idx = key_item.index()
+                    proxy_key_item_idx = self.proxy_model.mapFromSource(source_key_item_idx)
+                    if proxy_key_item_idx.isValid():
+                        self.tree_view.expand(proxy_key_item_idx)
 
             except ValueError as e:
                 QMessageBox.critical(self, "Add Item Error", str(e))
@@ -522,34 +637,39 @@ class JsonEditorWidget(QWidget):
                 QMessageBox.critical(self, "Add Item Error", f"An unexpected error occurred: {e}")
 
     def handle_remove_item(self):
-        current_index = self.tree_view.currentIndex()
-        if not current_index.isValid():
+        proxy_current_index = self.tree_view.currentIndex()
+        if not proxy_current_index.isValid():
             QMessageBox.information(self, "Remove Item", "Please select an item to remove.")
             return
 
-        selected_item = self.model.itemFromIndex(current_index)
+        # Map to source for model operations
+        source_current_index = self.proxy_model.mapToSource(proxy_current_index)
+        if not source_current_index.isValid(): # Should not happen if proxy index was valid
+            QMessageBox.warning(self, "Remove Item", "Could not map selected item for removal.")
+            return
+
+        selected_item = self.model.itemFromIndex(source_current_index)
+        if not selected_item: # Should also not happen
+            QMessageBox.warning(self, "Remove Item", "Selected item not found in source model.")
+            return
         
-        parent_item = selected_item.parent()
+        parent_item = selected_item.parent() # This is a source model parent
         item_row_to_remove = selected_item.row()
 
-        if parent_item:
+        if parent_item: # Parent is a QStandardItem from the source model
             parent_item.removeRow(item_row_to_remove)
-            # Check if the parent was a list to re-index
             if self._get_stored_type_info(parent_item) == "list":
                 for i in range(parent_item.rowCount()):
-                    item_at_new_index = parent_item.child(i, 0) # Key/Index item
+                    item_at_new_index = parent_item.child(i, 0) 
                     if item_at_new_index: 
                         item_at_new_index.setText(str(i))
-        else: # It's a top-level item (child of invisibleRootItem)
-            self.model.removeRow(item_row_to_remove)
-            # Check if root itself is a list to re-index (less common for root to be list, but possible)
+        else: # Top-level item (child of invisibleRootItem)
+            self.model.removeRow(item_row_to_remove) # Remove from source model's root
             if self._get_stored_type_info(self.model.invisibleRootItem()) == "list":
-                 for i in range(self.model.rowCount()): # Iterate root items
-                    item_at_new_index = self.model.item(i, 0) # Key/Index item
+                 for i in range(self.model.rowCount()): 
+                    item_at_new_index = self.model.item(i, 0) 
                     if item_at_new_index:
                         item_at_new_index.setText(str(i))
-
-
 # Example usage for direct testing of the widget
 if __name__ == '__main__':
     app = QApplication(sys.argv)

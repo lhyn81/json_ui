@@ -5,15 +5,24 @@ A custom PySide6 widget for displaying, editing, and managing JSON-like data. Th
 ## Features
 
 *   **Tree View Display**: Hierarchical display of JSON data (objects and arrays).
-*   **Load and Save**:
+*   **Key Filtering**: Real-time filtering of tree items by key using a filter input field.
+*   **Load, Save, and Save As**:
     *   Load JSON data from `.json` files.
-    *   Save the current JSON structure back to a `.json` file.
+    *   "Save" the current JSON structure to its original file or prompt for a new file if unsaved.
+    *   "Save As..." to save the current JSON structure to a new user-specified file.
+    *   Window title updates to reflect the currently open file.
 *   **In-Place Editing**:
     *   Edit keys (for objects) and values directly in the tree.
     *   Automatic type conversion feedback (e.g., "true" becomes `true`).
 *   **Structural Modifications**:
     *   **Add Item**: Add new key-value pairs to objects or new elements to arrays using a dedicated dialog that allows specifying the key (if applicable), value, and data type.
     *   **Remove Item**: Delete selected items (keys from objects or elements from arrays).
+*   **Consistency Check**:
+    *   Verify if all objects within a selected array share the same set of keys.
+    *   Reports missing or extra keys for each inconsistent object.
+*   **View Controls**:
+    *   **Expand All**: Fully expand all nodes in the tree.
+    *   **Collapse All**: Fully collapse all nodes in the tree.
 *   **Data Type Handling**: Supports common JSON data types: strings, numbers (integers/floats), booleans, null, objects, and arrays.
 *   **Type Preservation**: Maintains distinction between empty objects (`{}`) and empty lists (`[]`) during load/save operations.
 
