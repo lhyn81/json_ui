@@ -1,0 +1,38 @@
+{
+    "projectName": "Data Visualizer",
+    "version": 1.2,
+    "isActive": true,
+    "settings": {
+        "theme": "dark",
+        "notifications": {
+            "email": true,
+            "sms": false
+        },
+        "ports": [8080, 8081, 9000],
+        "allowed_hosts": []
+    },
+    "contributors": [
+        {
+            "id": 101,
+            "name": "Alice",
+            "roles": ["developer", "reviewer"],
+            "contact": null
+        },
+        {
+            "id": 102,
+            "name": "Bob",
+            "roles": ["designer"],
+            "contact": {
+                "email": "bob@example.com"
+            }
+        }
+    ],
+    "emptyObject": {},
+    "emptyList": [],
+    "matrix": [
+        [1, 2, 3],
+        [4, 5, 6],
+        [7, 8, 9]
+    ],
+    "description": "A sample configuration file with various data types and structures."
+}

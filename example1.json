@@ -1,0 +1,40 @@
+{
+    "cmds": {
+        "head": {
+            "type": "algo",
+            "name": "开始",
+            "param": {
+                "funcID": "algoWait",
+                "args": 1,
+                "done": null
+            }
+        },
+        "end": {
+            "type": "algo",
+            "name": "生成报告",
+            "param": {
+                "funcID": "algoSummary",
+                "args": null,
+                "done": null
+            }
+        },
+        "fde7d20a": {
+            "type": "algo",
+            "name": "555",
+            "param": {
+                "funcID": "algoWait",
+                "args": 1,
+                "done": null
+            }
+        },
+        "83dcb222": {
+            "type": "algo",
+            "name": "233",
+            "param": {
+                "funcID": "algoWait",
+                "args": 1,
+                "done": null
+            }
+        }
+    }
+}
