@@ -196,6 +196,12 @@ class JsonEditorWidget(QWidget):
 
         # self.setLayout(main_layout) # QVBoxLayout was already passed self
 
+    def handle_expand_all(self):
+        self.tree_view.expandAll()
+
+    def handle_collapse_all(self):
+        self.tree_view.collapseAll()
+
     def _store_type_info(self, item, data_type):
         # Helper to store original type (list or dict) for empty collections
         # or for distinguishing between list and dict if keys are all numeric
@@ -537,6 +543,9 @@ class JsonEditorWidget(QWidget):
                 window.setWindowTitle(f"{base_title} - {file_name}")
             else:
                 window.setWindowTitle(f"{base_title} - New File")
+
+    def handle_consistency_check(self):
+        QMessageBox.information(self, "Consistency Check", "Feature not yet implemented.")
 
     def handle_add_item(self):
         proxy_current_index = self.tree_view.currentIndex()

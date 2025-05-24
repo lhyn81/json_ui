@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch, MagicMock
 import sys
 import os
 import json
@@ -17,12 +18,13 @@ from json_editor_widget import JsonEditorWidget
 
 
 # Global app instance, created only if QApplication is available and not already running
+# Ensure sys.argv exists for QApplication, default to empty list if not (e.g. in some test runners)
 app_instance = None
 if QApplication:
     try:
         app_instance = QApplication.instance()
         if not app_instance:
-            app_instance = QApplication(sys.argv if hasattr(sys, 'argv') else [])
+            app_instance = QApplication(sys.argv if hasattr(sys, 'argv') else []) # Ensure sys.argv is passed
     except Exception as e:
         print(f"Failed to create QApplication for tests: {e}")
 
@@ -113,34 +115,19 @@ class TestJsonEditorWidgetDataLogic(unittest.TestCase):
         json_string = '{"name": "Test", "value": 123}'
         expected_dict = {"name": "Test", "value": 123}
         # Mock QMessageBox to prevent UI pop-ups during tests
-        original_qmessagebox = JsonEditorWidget.QMessageBox if hasattr(JsonEditorWidget, 'QMessageBox') else None
-        JsonEditorWidget.QMessageBox = unittest.mock.MagicMock()
-        
-        try:
+        # Ensure QMessageBox is properly mocked on the class for the duration of the test.
+        with patch.object(JsonEditorWidget, 'QMessageBox', MagicMock()) as mock_msg_box:
             self.assertTrue(self.widget.load_json_from_string(json_string))
             self.assertEqual(self.widget.to_dict(), expected_dict)
-        finally:
-            if original_qmessagebox:
-                 JsonEditorWidget.QMessageBox = original_qmessagebox # Restore
-            elif hasattr(JsonEditorWidget, 'QMessageBox'): # Clean up if we added it
-                 del JsonEditorWidget.QMessageBox
 
 
     def test_load_json_from_string_invalid(self):
         print("\nRunning: test_load_json_from_string_invalid")
         json_string = '{"name": "Test", "value": 123,}' # Invalid trailing comma
-        original_qmessagebox = JsonEditorWidget.QMessageBox if hasattr(JsonEditorWidget, 'QMessageBox') else None
-        JsonEditorWidget.QMessageBox = unittest.mock.MagicMock()
-        
-        try:
+        with patch.object(JsonEditorWidget, 'QMessageBox', MagicMock()) as mock_msg_box:
             self.assertFalse(self.widget.load_json_from_string(json_string))
             # Optionally, check that QMessageBox.critical was called
-            JsonEditorWidget.QMessageBox.critical.assert_called_once()
-        finally:
-            if original_qmessagebox:
-                JsonEditorWidget.QMessageBox = original_qmessagebox
-            elif hasattr(JsonEditorWidget, 'QMessageBox'):
-                 del JsonEditorWidget.QMessageBox
+            mock_msg_box.critical.assert_called_once()
 
     # --- Tests for Consistency Check Logic ---
 
@@ -277,9 +264,65 @@ if __name__ == '__main__':
         except ImportError:
             # If PySide6 isn't available at all, this mock won't save direct calls in widget
             print("Warning: PySide6.QtWidgets.QMessageBox not found, mock may not cover all usage if widget calls it directly.")
-            JsonEditorWidget.QMessageBox = mock.MagicMock() # Provide a mock if not importable
+            # Ensure the class attribute exists for mocking, even if it's just a MagicMock
+            if not hasattr(JsonEditorWidget, 'QMessageBox'):
+                JsonEditorWidget.QMessageBox = MagicMock()
 
 
+class TestJsonEditorWidgetUIActions(unittest.TestCase):
+    def setUp(self):
+        """Set up the test environment for UI action tests."""
+        # Ensure a QApplication instance exists.
+        global app_instance
+        if QApplication and not app_instance:
+            try:
+                app_instance = QApplication(sys.argv if hasattr(sys, 'argv') else [])
+            except Exception as e:
+                # This might happen if sys.argv is not suitable or if it's run in an env
+                # where QApplication cannot be initialized (e.g. no display server and no headless platform plugin)
+                print(f"Failed to create QApplication for TestJsonEditorWidgetUIActions: {e}")
+                # Depending on the tests, this might be a critical failure.
+                # For now, we'll allow tests to proceed, but they might fail if they strictly need QApplication.
+        self.widget = JsonEditorWidget()
+
+    @patch.object(JsonEditorWidget, 'tree_view', MagicMock())
+    def test_handle_expand_all(self):
+        print("\nRunning: test_handle_expand_all")
+        self.widget.handle_expand_all()
+        self.widget.tree_view.expandAll.assert_called_once()
+
+    @patch.object(JsonEditorWidget, 'tree_view', MagicMock())
+    def test_handle_collapse_all(self):
+        print("\nRunning: test_handle_collapse_all")
+        self.widget.handle_collapse_all()
+        self.widget.tree_view.collapseAll.assert_called_once()
+
+    @patch('json_editor_widget.QMessageBox.information')
+    def test_handle_consistency_check(self, mock_qmessagebox_information):
+        print("\nRunning: test_handle_consistency_check")
+        self.widget.handle_consistency_check()
+        mock_qmessagebox_information.assert_called_once_with(
+            self.widget, 
+            "Consistency Check", 
+            "Feature not yet implemented."
+        )
+
+
+if __name__ == '__main__':
+    # unittest.mock.patch is used, so ensure unittest.mock is imported
+    # from unittest import mock # Already handled by 'from unittest.mock import patch, MagicMock'
+
+    # The following block for ensuring JsonEditorWidget.QMessageBox exists is good practice
+    # if tests are run directly and the widget's module might not perfectly handle its own imports
+    # in a test-only context (though ideally the module itself should be robust).
+    if not hasattr(JsonEditorWidget, 'QMessageBox'):
+        try:
+            from PySide6.QtWidgets import QMessageBox
+            JsonEditorWidget.QMessageBox = QMessageBox
+        except ImportError:
+            print("Warning: PySide6.QtWidgets.QMessageBox not found for __main__ guard, using MagicMock.")
+            JsonEditorWidget.QMessageBox = MagicMock()
+    
     unittest.main()
 
 ```
