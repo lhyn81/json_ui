@@ -11,10 +11,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 QApplication = None
 try:
     from PySide6.QtWidgets import QApplication
+    from PySide6.QtGui import QStandardItemModel
+    from PySide6.QtCore import QModelIndex
 except ImportError:
-    print("PySide6.QtWidgets.QApplication not found, running tests without it where possible.")
+    print("PySide6 components not found, running tests without them where possible.")
+    QStandardItemModel = None # Placeholder if not available
+    QModelIndex = None # Placeholder
 
-from json_editor_widget import JsonEditorWidget
+from json_editor_widget import JsonEditorWidget, KeyFilterProxyModel
 
 
 # Global app instance, created only if QApplication is available and not already running
@@ -322,6 +326,142 @@ if __name__ == '__main__':
         except ImportError:
             print("Warning: PySide6.QtWidgets.QMessageBox not found for __main__ guard, using MagicMock.")
             JsonEditorWidget.QMessageBox = MagicMock()
+
+class TestKeyFilterProxyModel(unittest.TestCase):
+    def setUp(self):
+        global app_instance
+        if QApplication and not app_instance:
+            try:
+                app_instance = QApplication(sys.argv if hasattr(sys, 'argv') else [])
+            except Exception as e:
+                print(f"Failed to create QApplication for TestKeyFilterProxyModel: {e}")
+        
+        self.editor_widget = JsonEditorWidget() # For _populate_tree_recursive and _format_value_for_display
+        self.source_model = QStandardItemModel()
+        self.proxy_model = KeyFilterProxyModel()
+        self.proxy_model.setSourceModel(self.source_model)
+
+    def _populate_source_model(self, data_dict):
+        self.source_model.clear() # Clear previous data
+        # JsonEditorWidget._populate_tree_recursive expects parent_item, not parent_index
+        self.editor_widget._populate_tree_recursive(data_dict, self.source_model.invisibleRootItem())
+
+    def _get_visible_items(self, model_to_check, parent_index=QModelIndex()):
+        """
+        Traverses the proxy model and returns a nested list/dict structure 
+        representing the visible items.
+        Format: [('key', 'value'), ('parent_key', '(dict)', [('child_key', 'child_value')])]
+        """
+        visible_items = []
+        if not model_to_check: return visible_items
+
+        for row in range(model_to_check.rowCount(parent_index)):
+            key_index = model_to_check.index(row, 0, parent_index)
+            value_index = model_to_check.index(row, 1, parent_index)
+            
+            if not key_index.isValid():
+                continue
+
+            key_text = model_to_check.data(key_index)
+            value_text = model_to_check.data(value_index) # This is the display value, e.g. "(dict)" or formatted primitive
+
+            # Check for children in the proxy model
+            if model_to_check.hasChildren(key_index):
+                children = self._get_visible_items(model_to_check, key_index)
+                visible_items.append((key_text, value_text, children))
+            else:
+                visible_items.append((key_text, value_text))
+        return visible_items
+
+    def test_filter_parent_match(self):
+        print("\nRunning: test_filter_parent_match")
+        data = {"parent": {"child_leaf": "value1", "child_obj": {"grandchild": "value2"}}, "other_parent": "value3"}
+        self._populate_source_model(data)
+        
+        self.proxy_model.set_filter_text("parent")
+        
+        visible = self._get_visible_items(self.proxy_model)
+        
+        expected = [
+            ("parent", "(dict)", [
+                ("child_leaf", self.editor_widget._format_value_for_display("value1")),
+                ("child_obj", "(dict)", [
+                    ("grandchild", self.editor_widget._format_value_for_display("value2"))
+                ])
+            ])
+        ]
+        self.assertEqual(visible, expected, "Parent match filtering failed.")
+        
+        # Check that "other_parent" is not at the root
+        root_keys = [item[0] for item in visible]
+        self.assertNotIn("other_parent", root_keys, "'other_parent' should not be visible at root.")
+
+    def test_filter_child_match_deeply_nested(self):
+        print("\nRunning: test_filter_child_match_deeply_nested")
+        data = {"user": {"name": "John", "details": {"age": 30, "city": "New York"}}, "config": {"enabled": True}}
+        self._populate_source_model(data)
+        
+        self.proxy_model.set_filter_text("city")
+        
+        visible = self._get_visible_items(self.proxy_model)
+        
+        expected = [
+            ("user", "(dict)", [
+                # name and details are visible because 'user' is an ancestor of 'city'
+                ("name", self.editor_widget._format_value_for_display("John")), 
+                ("details", "(dict)", [
+                    # age is visible because 'details' is an ancestor of 'city'
+                    ("age", self.editor_widget._format_value_for_display(30)),    
+                    ("city", self.editor_widget._format_value_for_display("New York"))
+                ])
+            ])
+        ]
+        self.assertEqual(visible, expected, "Deep child match filtering failed.")
+        root_keys = [item[0] for item in visible]
+        self.assertNotIn("config", root_keys, "'config' should not be visible at root.")
+
+    def test_filter_sibling_of_matched_child(self):
+        print("\nRunning: test_filter_sibling_of_matched_child")
+        data = {"parent_key": {"child_match": "value_m", "child_sibling": "value_s"}}
+        self._populate_source_model(data)
+        
+        self.proxy_model.set_filter_text("child_match")
+        visible = self._get_visible_items(self.proxy_model)
+        
+        expected = [
+            ("parent_key", "(dict)", [
+                ("child_match", self.editor_widget._format_value_for_display("value_m")),
+                # child_sibling is visible because parent_key (ancestor) is shown due to child_match
+                ("child_sibling", self.editor_widget._format_value_for_display("value_s")) 
+            ])
+        ]
+        self.assertEqual(visible, expected, "Sibling of matched child filtering failed.")
+
+    def test_filter_no_match(self):
+        print("\nRunning: test_filter_no_match")
+        data = {"key1": "value1", "key2": "value2"}
+        self._populate_source_model(data)
+        
+        self.proxy_model.set_filter_text("nonexistent")
+        visible = self._get_visible_items(self.proxy_model)
+        
+        self.assertEqual(visible, [], "No match filtering should result in empty list.")
+
+    def test_filter_empty_text(self):
+        print("\nRunning: test_filter_empty_text")
+        data = {"key1": "value1", "key2": {"subkey": "subvalue"}}
+        self._populate_source_model(data)
+        
+        self.proxy_model.set_filter_text("") # Empty filter
+        visible = self._get_visible_items(self.proxy_model)
+        
+        expected = [
+            ("key1", self.editor_widget._format_value_for_display("value1")),
+            ("key2", "(dict)", [
+                ("subkey", self.editor_widget._format_value_for_display("subvalue"))
+            ])
+        ]
+        self.assertEqual(visible, expected, "Empty filter text should show all items.")
     
     unittest.main()
 

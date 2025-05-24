@@ -32,35 +32,47 @@ class KeyFilterProxyModel(QSortFilterProxyModel):
         self.filter_text = text.lower()
         self.invalidateFilter() # Trigger a re-filter
 
+    def _item_or_ancestor_matches_filter(self, item_key_index, source_model):
+        # item_key_index is the QModelIndex for the key item itself (column 0).
+        if not item_key_index.isValid():
+            return False
+
+        current_check_index = item_key_index
+        # Traverse up from item_key_index to check if it or any parent key matches filter_text
+        while current_check_index.isValid() and current_check_index != source_model.invisibleRootItem().index():
+            # Get the QStandardItem for the key at current_check_index (column 0)
+            key_item = source_model.itemFromIndex(current_check_index) 
+            if key_item and self.filter_text in key_item.text().lower():
+                return True
+            current_check_index = current_check_index.parent() # Move to parent item's index in the source model tree
+        return False
+
     def filterAcceptsRow(self, source_row, source_parent_index):
-        if not self.filter_text: # No filter, accept all
+        if not self.filter_text:
             return True
 
         source_model = self.sourceModel()
-        
-        # Get the QStandardItem for the key in the current row
-        key_item_index = source_model.index(source_row, 0, source_parent_index)
-        if not key_item_index.isValid():
-            return False # Should not happen with valid model
+        # This index points to the key item of the current row being considered (column 0)
+        current_row_key_item_index = source_model.index(source_row, 0, source_parent_index)
 
-        key_item = source_model.itemFromIndex(key_item_index)
-        if not key_item:
-             return False # Should not happen
+        if not current_row_key_item_index.isValid():
+            return False
 
-        # Check if the current item's key matches
-        current_key_text = key_item.text().lower()
-        key_matches = self.filter_text in current_key_text
-        
-        if key_matches:
-            return True # Current item's key matches, show it and its children
+        # 1. Check if current item or any of its ancestors match the filter
+        if self._item_or_ancestor_matches_filter(current_row_key_item_index, source_model):
+            return True
 
-        # If key doesn't match, check if any children match (so parent is visible)
-        if source_model.hasChildren(key_item_index):
-            for i in range(source_model.rowCount(key_item_index)):
-                if self.filterAcceptsRow(i, key_item_index): # Recursive call for children
+        # 2. If not, check if any descendant of the current item matches the filter
+        #    (This makes the current item a visible pathway to a matching descendant)
+        #    The key_item itself is used as the parent_item for its children in the model structure.
+        #    We need to check if this item (current_row_key_item_index) has children in the source model.
+        if source_model.hasChildren(current_row_key_item_index):
+            for i in range(source_model.rowCount(current_row_key_item_index)):
+                # Recursive call: source_row is i, source_parent_index for the child is current_row_key_item_index
+                if self.filterAcceptsRow(i, current_row_key_item_index):
                     return True
         
-        return False # Neither current key nor any children keys match
+        return False
 
 
 class AddItemDialog(QDialog):
